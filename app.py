@@ -197,20 +197,18 @@ def compute_odds_normalization(row):
         home_odds = away_odds = None
 
     if not home_odds or not away_odds or home_odds <= 0 or away_odds <= 0:
-        return ""
+        return "", ""
 
     implied_home = 1 / home_odds
     implied_away = 1 / away_odds
     total = implied_home + implied_away
 
     if total <= 0:
-        return ""
+        return "", ""
 
-    normalized = {
-        "home": round(implied_home / total, 4),
-        "away": round(implied_away / total, 4),
-    }
-    return normalized
+    normalized_home = round(implied_home / total, 4)
+    normalized_away = round(implied_away / total, 4)
+    return normalized_home, normalized_away
 
 
 def fetch_json_with_playwright(url, headers):
@@ -294,7 +292,9 @@ def merge_events_and_odds(date, cookies_header):
         row["startTimestamp"] = ev.get("startTimestamp")
 
         row.update(compute_score_metrics(row))
-        row["oddsNormalization"] = compute_odds_normalization(row)
+        norm_home, norm_away = compute_odds_normalization(row)
+        row["oddsNormalizationHome"] = norm_home
+        row["oddsNormalizationAway"] = norm_away
 
         merged.append(row)
 
