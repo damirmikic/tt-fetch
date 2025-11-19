@@ -2,6 +2,7 @@ import json
 import asyncio
 import csv
 import subprocess
+import re
 from datetime import date as dt_date
 from io import StringIO
 
@@ -109,15 +110,107 @@ def rows_to_csv_bytes(rows):
     if not rows:
         return b""
 
+    serialized_rows = []
+    for row in rows:
+        serialized_row = {}
+        for key, value in row.items():
+            if isinstance(value, (dict, list)):
+                serialized_row[key] = json.dumps(value, ensure_ascii=False)
+            else:
+                serialized_row[key] = value
+        serialized_rows.append(serialized_row)
+
     buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=rows[0].keys())
+    writer = csv.DictWriter(buffer, fieldnames=serialized_rows[0].keys())
     writer.writeheader()
-    writer.writerows(rows)
+    writer.writerows(serialized_rows)
     return buffer.getvalue().encode("utf-8")
 
 
 def rows_to_json_bytes(rows):
     return json.dumps(rows, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _safe_int(value):
+    if value in (None, "", "-"):
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"-?\d+", text)
+    if not match:
+        return None
+    try:
+        return int(match.group())
+    except ValueError:
+        return None
+
+
+def compute_score_metrics(row):
+    home_points = 0
+    away_points = 0
+    total_sets = 0
+    first_set_points = None
+
+    for idx in range(1, MAX_SETS + 1):
+        home_val = _safe_int(row.get(f"s{idx}h"))
+        away_val = _safe_int(row.get(f"s{idx}a"))
+
+        if home_val is None and away_val is None:
+            continue
+
+        total_sets += 1
+
+        if home_val is not None:
+            home_points += home_val
+        if away_val is not None:
+            away_points += away_val
+
+        if idx == 1 and first_set_points is None:
+            first_set_points = (home_val or 0) + (away_val or 0)
+
+    total_points = home_points + away_points
+    points_margin = home_points - away_points
+
+    return {
+        "totalSets": total_sets,
+        "totalPoints": total_points,
+        "firstSetPoints": first_set_points if first_set_points is not None else "",
+        "homePoints": home_points,
+        "awayPoints": away_points,
+        "pointsMargin": points_margin,
+    }
+
+
+def compute_odds_normalization(row):
+    home_odds = row.get("oddsHome")
+    away_odds = row.get("oddsAway")
+
+    try:
+        home_odds = float(home_odds) if home_odds not in (None, "") else None
+        away_odds = float(away_odds) if away_odds not in (None, "") else None
+    except (TypeError, ValueError):
+        home_odds = away_odds = None
+
+    if not home_odds or not away_odds or home_odds <= 0 or away_odds <= 0:
+        return ""
+
+    implied_home = 1 / home_odds
+    implied_away = 1 / away_odds
+    total = implied_home + implied_away
+
+    if total <= 0:
+        return ""
+
+    normalized = {
+        "home": round(implied_home / total, 4),
+        "away": round(implied_away / total, 4),
+    }
+    return normalized
 
 
 def fetch_json_with_playwright(url, headers):
@@ -199,6 +292,9 @@ def merge_events_and_odds(date, cookies_header):
 
         row.update(extract_set_scores(ev.get("homeScore"), ev.get("awayScore")))
         row["startTimestamp"] = ev.get("startTimestamp")
+
+        row.update(compute_score_metrics(row))
+        row["oddsNormalization"] = compute_odds_normalization(row)
 
         merged.append(row)
 
