@@ -316,6 +316,39 @@ def merge_events_and_odds(date, cookies_header, user_agent):
         if eid not in odds:
             continue
 
+        # --- FILTER LOGIC: STATUS & SCORE COMPLETENESS ---
+        status_code = ev.get("status", {}).get("code")
+        
+        # Only process finished matches (Status Code 100 is standard for Ended)
+        # We also double-check score logic below to be sure.
+        if status_code != 100:
+            continue
+
+        home_score_obj = ev.get("homeScore", {})
+        away_score_obj = ev.get("awayScore", {})
+        
+        try:
+            # Parse sets (display value is the main set score, e.g. 3)
+            h_sets = int(home_score_obj.get("display", -1))
+            a_sets = int(away_score_obj.get("display", -1))
+        except (ValueError, TypeError):
+            # If we can't parse the score, it's invalid/incomplete
+            continue
+        
+        # Calculate Format based on Winner's Sets
+        winner_sets = max(h_sets, a_sets)
+        match_format = ""
+
+        if winner_sets == 3:
+            match_format = "BO5"
+        elif winner_sets == 4:
+            match_format = "BO7"
+        else:
+            # If winner has < 3 sets (e.g. 2-0 retired) or > 4 (rare/error), skip match
+            # This effectively filters out incomplete matches or retirements.
+            continue
+        # -------------------------------------------------
+
         market = odds[eid]
         choices = market.get("choices", [])
 
@@ -325,10 +358,11 @@ def merge_events_and_odds(date, cookies_header, user_agent):
         row = {
             "eventId": eid,
             "tournament": ev.get("tournament", {}).get("name", ""),
+            "matchFormat": match_format, # New Column
             "homePlayer": ev.get("homeTeam", {}).get("name", ""),
             "awayPlayer": ev.get("awayTeam", {}).get("name", ""),
-            "homeScore": ev.get("homeScore", {}).get("display", ""),
-            "awayScore": ev.get("awayScore", {}).get("display", ""),
+            "homeScore": h_sets,
+            "awayScore": a_sets,
             "oddsHome": fractional_to_decimal(home_choice.get("fractionalValue") if home_choice else None),
             "oddsAway": fractional_to_decimal(away_choice.get("fractionalValue") if away_choice else None),
         }
